@@ -153,7 +153,8 @@
 //! [winit]: https://docs.rs/winit
 //! [tao]: https://docs.rs/tao
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+// use crossbeam_channel::{unbounded, Receiver, Sender};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver as Receiver, UnboundedSender as Sender};
 use once_cell::sync::{Lazy, OnceCell};
 
 pub mod about_metadata;
@@ -444,7 +445,7 @@ pub struct MenuEvent {
 pub type MenuEventReceiver = Receiver<MenuEvent>;
 type MenuEventHandler = Box<dyn Fn(MenuEvent) + Send + Sync + 'static>;
 
-static MENU_CHANNEL: Lazy<(Sender<MenuEvent>, MenuEventReceiver)> = Lazy::new(unbounded);
+static mut MENU_CHANNEL: Lazy<(Sender<MenuEvent>, MenuEventReceiver)> = Lazy::new(unbounded);
 static MENU_EVENT_HANDLER: OnceCell<Option<MenuEventHandler>> = OnceCell::new();
 
 impl MenuEvent {
@@ -459,8 +460,11 @@ impl MenuEvent {
     /// ## Note
     ///
     /// This will not receive any events if [`MenuEvent::set_event_handler`] has been called with a `Some` value.
-    pub fn receiver<'a>() -> &'a MenuEventReceiver {
-        &MENU_CHANNEL.1
+    pub fn receiver<'a>() -> &'a mut MenuEventReceiver {
+        #[allow(static_mut_refs)]
+        unsafe {
+            &mut MENU_CHANNEL.1
+        }
     }
 
     /// Set a handler to be called for new events. Useful for implementing custom event sender.
@@ -481,7 +485,8 @@ impl MenuEvent {
         if let Some(handler) = MENU_EVENT_HANDLER.get_or_init(|| None) {
             handler(event);
         } else {
-            let _ = MENU_CHANNEL.0.send(event);
+            #[allow(static_mut_refs)]
+            let _ = unsafe { MENU_CHANNEL.0.unbounded_send(event) };
         }
     }
 }
