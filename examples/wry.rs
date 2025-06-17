@@ -273,7 +273,7 @@ fn main() -> wry::Result<()> {
 
     fn create_webview(window: &Rc<Window>) -> WebViewBuilder<'_> {
         #[cfg(not(target_os = "linux"))]
-        return WebViewBuilder::new(window);
+        return WebViewBuilder::new();
         #[cfg(target_os = "linux")]
         WebViewBuilder::new_gtk(window.default_vbox().unwrap())
     };
@@ -281,11 +281,11 @@ fn main() -> wry::Result<()> {
     let webview = create_webview(&window)
         .with_html(&html)
         .with_ipc_handler(create_ipc_handler(&window))
-        .build()?;
+        .build(&window)?;
     let webview2 = create_webview(&window2)
         .with_html(html)
         .with_ipc_handler(create_ipc_handler(&window2))
-        .build()?;
+        .build(&window2)?;
 
     let menu_channel = MenuEvent::receiver();
 

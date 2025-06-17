@@ -31,7 +31,7 @@ pub use keyboard_types::{Code, Modifiers};
 use std::{borrow::Borrow, hash::Hash, str::FromStr};
 
 #[cfg(target_os = "macos")]
-pub const CMD_OR_CTRL: Modifiers = Modifiers::SUPER;
+pub const CMD_OR_CTRL: Modifiers = Modifiers::META;
 #[cfg(not(target_os = "macos"))]
 pub const CMD_OR_CTRL: Modifiers = Modifiers::CONTROL;
 
@@ -60,12 +60,7 @@ impl Accelerator {
     /// Creates a new accelerator to define keyboard shortcuts throughout your application.
     /// Only [`Modifiers::ALT`], [`Modifiers::SHIFT`], [`Modifiers::CONTROL`], and [`Modifiers::SUPER`]
     pub fn new(mods: Option<Modifiers>, key: Code) -> Self {
-        let mut mods = mods.unwrap_or_else(Modifiers::empty);
-        if mods.contains(Modifiers::META) {
-            mods.remove(Modifiers::META);
-            mods.insert(Modifiers::SUPER);
-        }
-
+        let mods = mods.unwrap_or_else(Modifiers::empty);
         let id = Self::generate_hash(mods, key);
 
         Self { mods, key, id }
@@ -82,7 +77,7 @@ impl Accelerator {
         if mods.contains(Modifiers::ALT) {
             accelerator_str.push_str("alt+")
         }
-        if mods.contains(Modifiers::SUPER) {
+        if mods.contains(Modifiers::META) {
             accelerator_str.push_str("super+")
         }
         accelerator_str.push_str(&key.to_string());
@@ -111,7 +106,7 @@ impl Accelerator {
     /// Returns `true` if this [`Code`] and [`Modifiers`] matches this `Accelerator`.
     pub fn matches(&self, modifiers: impl Borrow<Modifiers>, key: impl Borrow<Code>) -> bool {
         // Should be a const but const bit_or doesn't work here.
-        let base_mods = Modifiers::SHIFT | Modifiers::CONTROL | Modifiers::ALT | Modifiers::SUPER;
+        let base_mods = Modifiers::SHIFT | Modifiers::CONTROL | Modifiers::ALT | Modifiers::META;
         let modifiers = modifiers.borrow();
         let key = key.borrow();
         self.mods == *modifiers & base_mods && self.key == *key
@@ -189,7 +184,7 @@ fn parse_accelerator(accelerator: &str) -> Result<Accelerator, AcceleratorParseE
                     }
                     #[cfg(target_os = "macos")]
                     "COMMANDORCONTROL" | "COMMANDORCTRL" | "CMDORCTRL" | "CMDORCONTROL" => {
-                        mods |= Modifiers::SUPER;
+                        mods |= Modifiers::META;
                     }
                     #[cfg(not(target_os = "macos"))]
                     "COMMANDORCONTROL" | "COMMANDORCTRL" | "CMDORCTRL" | "CMDORCONTROL" => {
@@ -375,7 +370,7 @@ fn test_parse_accelerator() {
     assert_parse_accelerator!(
         "super+ctrl+SHIFT+alt+ArrowUp",
         Accelerator {
-            mods: Modifiers::SUPER | Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT,
+            mods: Modifiers::META | Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT,
             key: Code::ArrowUp,
             id: 0,
         }
@@ -410,7 +405,7 @@ fn test_parse_accelerator() {
         "CmdOrCtrl+Space",
         Accelerator {
             #[cfg(target_os = "macos")]
-            mods: Modifiers::SUPER,
+            mods: Modifiers::META,
             #[cfg(not(target_os = "macos"))]
             mods: Modifiers::CONTROL,
             key: Code::Space,

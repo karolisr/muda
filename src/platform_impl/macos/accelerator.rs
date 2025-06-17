@@ -114,7 +114,7 @@ impl Accelerator {
         if mods.contains(Modifiers::SHIFT) {
             flags.insert(NSEventModifierFlags::Shift);
         }
-        if mods.contains(Modifiers::SUPER) {
+        if mods.contains(Modifiers::META) {
             flags.insert(NSEventModifierFlags::Command);
         }
         if mods.contains(Modifiers::ALT) {

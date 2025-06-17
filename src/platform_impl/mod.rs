@@ -88,7 +88,7 @@ impl MenuItemKind {
         }
     }
 
-    pub(crate) fn child(&self) -> Ref<MenuChild> {
+    pub(crate) fn child(&'_ self) -> Ref<'_, MenuChild> {
         match self {
             MenuItemKind::MenuItem(i) => i.inner.borrow(),
             MenuItemKind::Submenu(i) => i.inner.borrow(),
@@ -98,7 +98,7 @@ impl MenuItemKind {
         }
     }
 
-    pub(crate) fn child_mut(&self) -> RefMut<MenuChild> {
+    pub(crate) fn child_mut(&'_ self) -> RefMut<'_, MenuChild> {
         match self {
             MenuItemKind::MenuItem(i) => i.inner.borrow_mut(),
             MenuItemKind::Submenu(i) => i.inner.borrow_mut(),
