@@ -1,5 +1,9 @@
 # Changelog
 
+## \[0.17.2]
+
+- [`dca0836`](https://www.github.com/tauri-apps/muda/commit/dca083660d04209109ae854b9a9436a809daf409) ([#321](https://www.github.com/tauri-apps/muda/pull/321) by [@signadou](https://www.github.com/tauri-apps/muda/../../signadou)) Fix padding unconditionally added to top-level submenus for icons even when there's no icon on Linux
+
 ## \[0.17.1]
 
 - [`0ae81ad`](https://www.github.com/tauri-apps/muda/commit/0ae81ad8b22dd2622e302254ce434d14880087a3) ([#308](https://www.github.com/tauri-apps/muda/pull/308) by [@s00d](https://www.github.com/tauri-apps/muda/../../s00d)) On Windows, fix icon of `Submenu` not visible when added to a root `Menu`
