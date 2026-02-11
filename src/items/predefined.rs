@@ -241,6 +241,7 @@ fn test_about_metadata() {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 #[allow(clippy::large_enum_variant)]
+#[derive(Default)]
 pub(crate) enum PredefinedMenuItemType {
     Separator,
     Copy,
@@ -260,13 +261,8 @@ pub(crate) enum PredefinedMenuItemType {
     About(Option<AboutMetadata>),
     Services,
     BringAllToFront,
+    #[default]
     None,
-}
-
-impl Default for PredefinedMenuItemType {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl PredefinedMenuItemType {

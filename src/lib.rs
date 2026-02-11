@@ -307,18 +307,14 @@ mod sealed {
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Default)]
 pub(crate) enum MenuItemType {
+    #[default]
     MenuItem,
     Submenu,
     Predefined,
     Check,
     Icon,
-}
-
-impl Default for MenuItemType {
-    fn default() -> Self {
-        Self::MenuItem
-    }
 }
 
 /// A helper trait with methods to help creating a context menu.
