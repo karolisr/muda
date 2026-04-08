@@ -19,18 +19,18 @@ use std::{
 use objc2::{
     define_class, msg_send,
     rc::Retained,
-    runtime::{AnyObject, Sel},
+    runtime::{AnyObject, NSObjectProtocol, ProtocolObject, Sel},
     sel, DeclaredClass, MainThreadOnly, Message,
 };
 use objc2_app_kit::{
     NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName,
     NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionCredits, NSAboutPanelOptionVersion,
     NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSEventModifierFlags,
-    NSImage, NSImageName, NSMenu, NSMenuItem, NSRunningApplication, NSView,
+    NSImage, NSImageName, NSMenu, NSMenuDelegate, NSMenuItem, NSRunningApplication, NSView,
 };
 use objc2_foundation::{
-    ns_string, MainThreadMarker, NSAttributedString, NSDictionary, NSInteger, NSPoint, NSSize,
-    NSString,
+    ns_string, MainThreadMarker, NSAttributedString, NSDictionary, NSInteger, NSObject, NSPoint,
+    NSSize, NSString,
 };
 
 use self::util::strip_mnemonic;
@@ -49,12 +49,61 @@ static COUNTER: Counter = Counter::new();
 #[allow(non_upper_case_globals)]
 const NSAboutPanelOptionCopyright: &str = "Copyright";
 
-#[derive(Debug, Clone)]
-struct NsMenuRef(u32, Retained<NSMenu>);
+define_class!(
+    /// A delegate for NSMenu that stores the menu id as an instance variable,
+    /// so that we can identify it later. Like when calling `set_as_windows_menu_for_nsapp`.
+    #[unsafe(super(NSObject))]
+    #[name = "MudaMenuDelegate"]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = u32]
+    struct MudaMenuDelegate;
+
+    unsafe impl NSObjectProtocol for MudaMenuDelegate {}
+    unsafe impl NSMenuDelegate for MudaMenuDelegate {}
+);
+
+impl MudaMenuDelegate {
+    fn new(mtm: MainThreadMarker, menu_id: u32) -> Retained<Self> {
+        let this = mtm.alloc().set_ivars(menu_id);
+        unsafe { msg_send![super(this), init] }
+    }
+
+    fn menu_id(&self) -> u32 {
+        *self.ivars()
+    }
+}
+
+#[derive(Clone)]
+struct NsMenuRef(
+    u32,
+    Retained<NSMenu>,
+    /// Prevent deallocation — NSMenu's delegate is a weak reference.
+    #[allow(dead_code)]
+    Retained<MudaMenuDelegate>,
+);
+
+impl NsMenuRef {
+    fn new(mtm: MainThreadMarker, id: u32, ns_menu: Retained<NSMenu>) -> Self {
+        let delegate = MudaMenuDelegate::new(mtm, id);
+
+        ns_menu.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+
+        Self(id, ns_menu, delegate)
+    }
+}
+
+impl std::fmt::Debug for NsMenuRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("NsMenuRef")
+            .field(&self.0)
+            .field(&self.1)
+            .finish()
+    }
+}
 
 impl Drop for NsMenuRef {
     fn drop(&mut self) {
-        unsafe { self.1.cancelTrackingWithoutAnimation() };
+        self.1.cancelTrackingWithoutAnimation();
     }
 }
 
@@ -82,10 +131,10 @@ impl Menu {
         let mtm =
             MainThreadMarker::new().expect("`muda::Menu` can only be created on the main thread");
         let ns_menu = NSMenu::new(mtm);
-        unsafe { ns_menu.setAutoenablesItems(false) };
+        ns_menu.setAutoenablesItems(false);
         Self {
             id: id.unwrap_or_else(|| MenuId(COUNTER.next().to_string())),
-            ns_menu: NsMenuRef(COUNTER.next(), ns_menu),
+            ns_menu: NsMenuRef::new(mtm, COUNTER.next(), ns_menu),
             children: Vec::new(),
         }
     }
@@ -98,18 +147,16 @@ impl Menu {
         let ns_menu_item = item.make_ns_item_for_menu(self.ns_menu.0)?;
         let child = item.child();
 
-        unsafe {
-            match op {
-                AddOp::Append => {
-                    self.ns_menu.1.addItem(&ns_menu_item);
-                    self.children.push(child);
-                }
-                AddOp::Insert(position) => {
-                    self.ns_menu
-                        .1
-                        .insertItem_atIndex(&ns_menu_item, position as NSInteger);
-                    self.children.insert(position, child);
-                }
+        match op {
+            AddOp::Append => {
+                self.ns_menu.1.addItem(&ns_menu_item);
+                self.children.push(child);
+            }
+            AddOp::Insert(position) => {
+                self.ns_menu
+                    .1
+                    .insertItem_atIndex(&ns_menu_item, position as NSInteger);
+                self.children.insert(position, child);
             }
         }
 
@@ -145,7 +192,7 @@ impl Menu {
         // remove each NSMenuItem from the NSMenu
         if let Some(ns_menu_items) = child_.ns_menu_items.remove(&self.ns_menu.0) {
             for item in ns_menu_items {
-                unsafe { self.ns_menu.1.removeItem(&item) };
+                self.ns_menu.1.removeItem(&item);
             }
         }
 
@@ -284,11 +331,11 @@ impl MenuChild {
             id: id.unwrap_or_else(|| MenuId(COUNTER.next().to_string())),
             enabled,
             children: Some(Vec::new()),
-            ns_menu: Some(NsMenuRef(COUNTER.next(), unsafe {
+            ns_menu: Some({
                 let menu = NSMenu::new(mtm);
                 menu.setAutoenablesItems(false);
-                menu
-            })),
+                NsMenuRef::new(mtm, COUNTER.next(), menu)
+            }),
             accelerator: None,
             checked: Cell::new(false),
             icon: None,
@@ -302,7 +349,7 @@ impl MenuChild {
     pub(crate) fn new_predefined(item_type: PredefinedMenuItemType, text: Option<String>) -> Self {
         let text = strip_mnemonic(text.unwrap_or_else(|| {
             // Gets the app's name from `NSRunningApplication::localizedName`.
-            let app_name = || unsafe {
+            let app_name = || {
                 let app = NSRunningApplication::currentApplication();
                 app.localizedName().unwrap_or_default()
             };
@@ -424,7 +471,7 @@ impl MenuChild {
 
     pub fn set_text(&mut self, text: &str) {
         self.text = strip_mnemonic(text);
-        unsafe {
+        {
             let title = NSString::from_str(&self.text);
             for ns_items in self.ns_menu_items.values() {
                 for ns_item in ns_items {
@@ -445,7 +492,7 @@ impl MenuChild {
         self.enabled = enabled;
         for ns_items in self.ns_menu_items.values() {
             for ns_item in ns_items {
-                unsafe { ns_item.setEnabled(enabled) };
+                ns_item.setEnabled(enabled);
             }
         }
     }
@@ -466,7 +513,7 @@ impl MenuChild {
 
             for ns_items in self.ns_menu_items.values() {
                 for ns_item in ns_items {
-                    unsafe {
+                    {
                         ns_item.setKeyEquivalent(&key_equivalent);
                         ns_item.setKeyEquivalentModifierMask(modifier_mask);
                     }
@@ -495,9 +542,7 @@ impl MenuChild {
         };
         for ns_items in self.ns_menu_items.values() {
             for ns_item in ns_items {
-                unsafe {
-                    ns_item.setState(state);
-                }
+                ns_item.setState(state);
             }
         }
     }
@@ -530,43 +575,38 @@ impl MenuChild {
 impl MenuChild {
     pub fn add_menu_item(&mut self, item: &dyn crate::IsMenuItem, op: AddOp) -> crate::Result<()> {
         let child = item.child();
-
-        unsafe {
-            match op {
-                AddOp::Append => {
-                    for menus in self.ns_menus.as_ref().unwrap().values() {
-                        for ns_menu in menus {
-                            let ns_menu_item = item.make_ns_item_for_menu(ns_menu.0)?;
-                            ns_menu.1.addItem(&ns_menu_item);
-                        }
+        match op {
+            AddOp::Append => {
+                for menus in self.ns_menus.as_ref().unwrap().values() {
+                    for ns_menu in menus {
+                        let ns_menu_item = item.make_ns_item_for_menu(ns_menu.0)?;
+                        ns_menu.1.addItem(&ns_menu_item);
                     }
-
-                    let ns_menu_item =
-                        item.make_ns_item_for_menu(self.ns_menu.as_ref().unwrap().0)?;
-                    self.ns_menu.as_ref().unwrap().1.addItem(&ns_menu_item);
-
-                    self.children.as_mut().unwrap().push(child);
                 }
-                AddOp::Insert(position) => {
-                    for menus in self.ns_menus.as_ref().unwrap().values() {
-                        for ns_menu in menus {
-                            let ns_menu_item = item.make_ns_item_for_menu(ns_menu.0)?;
-                            ns_menu
-                                .1
-                                .insertItem_atIndex(&ns_menu_item, position as NSInteger);
-                        }
+
+                let ns_menu_item = item.make_ns_item_for_menu(self.ns_menu.as_ref().unwrap().0)?;
+                self.ns_menu.as_ref().unwrap().1.addItem(&ns_menu_item);
+
+                self.children.as_mut().unwrap().push(child);
+            }
+            AddOp::Insert(position) => {
+                for menus in self.ns_menus.as_ref().unwrap().values() {
+                    for ns_menu in menus {
+                        let ns_menu_item = item.make_ns_item_for_menu(ns_menu.0)?;
+                        ns_menu
+                            .1
+                            .insertItem_atIndex(&ns_menu_item, position as NSInteger);
                     }
-
-                    let ns_menu_item =
-                        item.make_ns_item_for_menu(self.ns_menu.as_ref().unwrap().0)?;
-                    self.ns_menu
-                        .as_ref()
-                        .unwrap()
-                        .1
-                        .insertItem_atIndex(&ns_menu_item, position as NSInteger);
-
-                    self.children.as_mut().unwrap().insert(position, child);
                 }
+
+                let ns_menu_item = item.make_ns_item_for_menu(self.ns_menu.as_ref().unwrap().0)?;
+                self.ns_menu
+                    .as_ref()
+                    .unwrap()
+                    .1
+                    .insertItem_atIndex(&ns_menu_item, position as NSInteger);
+
+                self.children.as_mut().unwrap().insert(position, child);
             }
         }
 
@@ -625,7 +665,7 @@ impl MenuChild {
 
                     if let Some(items) = child_.ns_menu_items.remove(&menu.0) {
                         for item in items {
-                            unsafe { menu.1.removeItem(&item) };
+                            menu.1.removeItem(&item);
                         }
                     }
                 }
@@ -639,7 +679,7 @@ impl MenuChild {
                 .remove(&self.ns_menu.as_ref().unwrap().0)
             {
                 for item in ns_menu_items {
-                    unsafe { self.ns_menu.as_ref().unwrap().1.removeItem(&item) };
+                    self.ns_menu.as_ref().unwrap().1.removeItem(&item);
                 }
             }
         }
@@ -665,17 +705,49 @@ impl MenuChild {
     }
 
     pub fn set_as_windows_menu_for_nsapp(&self) {
-        let menu = &self.ns_menu.as_ref().unwrap().1;
-        let mtm = MainThreadMarker::from(&**menu);
+        let Some(menu) = self.resolve_ns_menu_for_nsapp() else {
+            return;
+        };
+
+        let mtm = MainThreadMarker::from(&*menu);
         let app = NSApplication::sharedApplication(mtm);
-        unsafe { app.setWindowsMenu(Some(menu)) }
+        app.setWindowsMenu(Some(&menu))
     }
 
     pub fn set_as_help_menu_for_nsapp(&self) {
-        let menu = &self.ns_menu.as_ref().unwrap().1;
-        let mtm = MainThreadMarker::from(&**menu);
+        let Some(menu) = self.resolve_ns_menu_for_nsapp() else {
+            return;
+        };
+
+        let mtm = MainThreadMarker::from(&*menu);
         let app = NSApplication::sharedApplication(mtm);
-        unsafe { app.setHelpMenu(Some(menu)) }
+        app.setHelpMenu(Some(&menu))
+    }
+
+    /// Finds the NSMenu instance for this submenu that is attached to the
+    /// current NSApp main menu, by reading the menu id stored in the
+    /// main menu's delegate.
+    fn resolve_ns_menu_for_nsapp(&self) -> Option<Retained<NSMenu>> {
+        let ns_menu = &self.ns_menu.as_ref().unwrap().1;
+        let mtm = MainThreadMarker::from(&**ns_menu);
+        let app = NSApplication::sharedApplication(mtm);
+        let main_menu = app.mainMenu()?;
+        let delegate = main_menu.delegate()?;
+
+        // Downcast the delegate to our MudaMenuDelegate to get the menu id
+        let delegate_obj: &AnyObject = ProtocolObject::as_ref(&*delegate);
+        let muda_delegate: &MudaMenuDelegate = delegate_obj.downcast_ref()?;
+        let parent_id = muda_delegate.menu_id();
+
+        // Look up the NSMenu in ns_menus for this parent id
+        self.ns_menus
+            .as_ref()
+            .unwrap()
+            .get(&parent_id)
+            // A submenu can be added multiple times to the same parent menu
+            // lets just take the first one we find
+            .and_then(|menus| menus.first())
+            .map(|menu_ref| menu_ref.1.clone())
     }
 
     pub fn ns_menu(&self) -> *mut std::ffi::c_void {
@@ -730,7 +802,7 @@ impl MenuChild {
             .unwrap()
             .entry(menu_id)
             .or_default()
-            .push(NsMenuRef(id, ns_submenu));
+            .push(NsMenuRef::new(mtm, id, ns_submenu));
 
         self.ns_menu_items
             .entry(menu_id)
@@ -794,15 +866,13 @@ impl MenuChild {
             }
         };
 
-        unsafe {
-            ns_menu_item.setEnabled(self.enabled);
+        ns_menu_item.setEnabled(self.enabled);
 
-            if let PredefinedMenuItemType::Services = item_type {
-                // we have to assign an empty menu as the app's services menu, and macOS will populate it
-                let services_menu = NSMenu::new(mtm);
-                NSApplication::sharedApplication(mtm).setServicesMenu(Some(&services_menu));
-                ns_menu_item.setSubmenu(Some(&services_menu));
-            }
+        if let PredefinedMenuItemType::Services = item_type {
+            // we have to assign an empty menu as the app's services menu, and macOS will populate it
+            let services_menu = NSMenu::new(mtm);
+            NSApplication::sharedApplication(mtm).setServicesMenu(Some(&services_menu));
+            ns_menu_item.setSubmenu(Some(&services_menu));
         }
 
         self.ns_menu_items
@@ -1032,10 +1102,7 @@ impl MenuItem {
                 }
 
                 None => {
-                    unsafe {
-                        NSApplication::sharedApplication(mtm)
-                            .orderFrontStandardAboutPanel(Some(self))
-                    };
+                    NSApplication::sharedApplication(mtm).orderFrontStandardAboutPanel(Some(self));
                 }
             }
         } else {
@@ -1075,14 +1142,10 @@ impl MenuItem {
 
 fn menuitem_set_icon(menuitem: &NSMenuItem, icon: Option<&Icon>) {
     if let Some(icon) = icon {
-        unsafe {
-            let nsimage = icon.inner.to_nsimage(Some(18.));
-            menuitem.setImage(Some(&nsimage));
-        }
+        let nsimage = icon.inner.to_nsimage(Some(18.));
+        menuitem.setImage(Some(&nsimage));
     } else {
-        unsafe {
-            menuitem.setImage(None);
-        }
+        menuitem.setImage(None);
     }
 }
 
@@ -1096,9 +1159,7 @@ fn menuitem_set_native_icon(menuitem: &NSMenuItem, icon: Option<NativeIcon>) {
             menuitem.setImage(Some(&nsimage));
         }
     } else {
-        unsafe {
-            menuitem.setImage(None);
-        }
+        menuitem.setImage(None);
     }
 }
 
@@ -1117,7 +1178,7 @@ unsafe fn show_context_menu(
         let location = NSPoint::new(pos.x, view_rect.size.height - pos.y);
         (location, Some(view))
     } else {
-        let mouse_location = unsafe { NSEvent::mouseLocation() };
+        let mouse_location = NSEvent::mouseLocation();
         let pos = LogicalPosition {
             x: mouse_location.x,
             y: mouse_location.y,
@@ -1126,7 +1187,7 @@ unsafe fn show_context_menu(
         (location, None)
     };
 
-    unsafe { ns_menu.popUpMenuPositioningItem_atLocation_inView(None, location, in_view) }
+    ns_menu.popUpMenuPositioningItem_atLocation_inView(None, location, in_view)
 }
 
 impl NativeIcon {
